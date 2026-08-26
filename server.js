@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { DatabaseSync } from 'node:sqlite';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -17,10 +18,66 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Open Database Connection
+// Ensure db folder exists
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
 console.log(`Connecting to SQLite DB at: ${dbPath}`);
 const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA foreign_keys = ON');
+
+// ===== AUTO-CREATE TABLES (Fixes Railway issue) =====
+db.exec(`
+  CREATE TABLE IF NOT EXISTS students (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    roll_no TEXT UNIQUE NOT NULL,
+    room_no TEXT,
+    pin TEXT NOT NULL
+  );
+  
+  CREATE TABLE IF NOT EXISTS menu (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    meal_type TEXT NOT NULL,
+    dish_names TEXT NOT NULL,
+    UNIQUE(date, meal_type)
+  );
+  
+  CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER NOT NULL,
+    menu_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    wastage_level TEXT NOT NULL,
+    comment TEXT,
+    submitted_at TEXT,
+    UNIQUE(student_id, menu_id),
+    FOREIGN KEY(student_id) REFERENCES students(id),
+    FOREIGN KEY(menu_id) REFERENCES menu(id)
+  );
+`);
+
+// ===== SEED DATA if empty =====
+const studentCount = db.prepare('SELECT COUNT(*) as c FROM students').get();
+if (studentCount.c === 0) {
+  console.log('Seeding students...');
+  db.prepare(`INSERT INTO students (name, roll_no, room_no, pin) VALUES (?, ?, ?, ?)`)
+    .run('Test Student', 'es24ad76', '101', '123456');
+  db.prepare(`INSERT INTO students (name, roll_no, room_no, pin) VALUES (?, ?, ?, ?)`)
+    .run('John Doe', 'ES24AD01', '102', '111111');
+}
+
+const today = new Date().toLocaleDateString('en-CA');
+const menuCount = db.prepare('SELECT COUNT(*) as c FROM menu WHERE date = ?').get(today);
+if (menuCount.c === 0) {
+  console.log(`Seeding menu for ${today}...`);
+  db.prepare(`INSERT INTO menu (date, meal_type, dish_names) VALUES (?, ?, ?)`).run(today, 'breakfast', 'Idli, Sambar, Coconut Chutney');
+  db.prepare(`INSERT INTO menu (date, meal_type, dish_names) VALUES (?, ?, ?)`).run(today, 'lunch', 'Rice, Dal, Curd, Veg Curry');
+  db.prepare(`INSERT INTO menu (date, meal_type, dish_names) VALUES (?, ?, ?)`).run(today, 'dinner', 'Chapati, Chicken Curry, Salad');
+}
 
 // Root endpoint for status check
 app.get('/', (req, res) => {
